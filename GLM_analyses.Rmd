@@ -1,0 +1,120 @@
+---
+title: "Stalker- GLM Analyses"
+author: "Jocelyn Stalker"
+date: "9/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(janitor)
+library(ggplot2)
+library(ggfortify)
+library(dplyr)
+library(arm)
+```
+
+We will be looking at factors affecting and factors being affected by the toxicity of two newts: the California Newt (*Taricha torosa*) and the Rough-skinned Newt (*Taricha granulosa*).
+!(https://lh3.googleusercontent.com/proxy/ouI7_sAQsbV8sWGH2oiPtbTykRtjQe5YKFh-00p-9VEXLc-QBTF2f4jAd-Rnp0YT8Zq4B_vbQQpdzJ3LCmuJsYXkavAkZIOsWLpoDrhF4lEiXMUisnPyNDVf) !(https://calphotos.berkeley.edu/imgs/512x768/0000_0000/0105/0567.jpeg)
+
+First, let's import and tidy the data.
+
+```{r Importing and Cleaning Data}
+data_newt <- read.csv("Data/newt_toxicity.csv", header=TRUE) %>% clean_names() %>% drop_na("ttx_cm2")
+data_newt <- data_newt %>% add_column("p_count" = rowSums(data_newt[9:15]))
+data_newt <- select(data_newt, site, species, sex, svl, bd_poz, ttx_cm2, p_count)
+```
+
+Let's make a plot to help visualize the impact of toxicity on the number of parasites/diseases found on each newt.
+
+```{r Figure 1. Number of parasites/diseases as a function of toxicity}
+ggplot(data_newt, aes(ttx_cm2, log(p_count))) + geom_point() +
+  geom_smooth(method = glm, method.args = list(family = poisson(link = "log"))) +
+  labs(title="GLM, Poisson Distributed Count Data") +
+  xlab ("Tetrodotoxin per Square Centimeter of Tissue") +
+  ylab ("Log of # of Parasites and Diseases")
+```
+
+The y-axis is log-transformed so that we can more clearly see the relationship between toxicity and parasite counts.
+
+```{r Building a Model and Making a Diagnostic Plot}
+newt.glm.p <- glm(p_count ~ ttx_cm2, data = data_newt, family = poisson(link = log))
+autoplot(newt.glm)
+```
+
+The autoplot shows us that there are three points which are raising concerns, but we are not yet equipped to interpret this and make an alternative decision, so... onward!
+
+```{r}
+summary(newt.glm.p)
+```
+
+This model is highly overdispersed (38010>299), so let's try a quasipoisson.
+
+```{r Quasipoisson GLM}
+newt.glm.qp <- glm(p_count ~ ttx_cm2, data = data_newt, family = quasipoisson(link = log))
+summary(newt.glm.qp)
+```
+
+Running a quasipoisson changed the p-value from highly significant to insignificant. Let's turn these estimates into something that is easier to interpret. How many parasites and diseases would we expect a newt with 10,000 tetrodotoxin per cm2 to have? What about 30,000, or 50,000?.
+
+```{r Calculating the Predicted Number of Parasites/Diseases}
+exp(3.173 + -2.537e-05*10000)
+exp(3.173 + -2.537e-05*30000)
+exp(3.173 + -2.537e-05*50000)
+```
+
+```{r Running an ANOVA on the GLM}
+anova(newt.glm.qp)
+```
+
+We can see that much of the deviance is not explained by the toxicity.
+
+```{r Calculating the Confidence Intervals of the Coefficient}
+coef(newt.glm.qp)
+confint(newt.glm.qp)
+```
+
+And there you have the confidence intervals. Let's move on to analyzing the impact of toxicity on presence/absence of a chytrid fungus. First, let's visualize the data with a plot.
+
+```{r Figure 2. Presence of Chytrid Fungus as a function of Toxicity}
+ggplot(data_newt, aes(ttx_cm2, bd_poz)) +
+  geom_point() +
+  geom_smooth(method="glm", method.args=list(family="binomial"(link="logit"))) +
+  labs(title="GLM, Binomial Count Data (present/absent)") + ylim(0,1)
+```
+
+Looks like there might be a relationship! Let's build a model.
+
+```{r Building a Model and Summarizing}
+newt_glm_b <- glm(bd_poz ~ ttx_cm2, data= data_newt, family= binomial(link= logit))
+summary(newt_glm_b)
+```
+
+So far, so good. It looks like the relationship is significant. Let's make a binned residual plot to confirm that our data is dispersed well.
+
+```{r Figure 3. Binned Residual Plot to Check Data Dispersion}
+x <- predict(newt_glm_b)
+y <- resid(newt_glm_b)
+binnedplot(x, y)
+```
+
+Looks good enough!
+
+```{r Finding the Coefficient and Confidence Intervals}
+coef(newt_glm_b)
+confint(newt_glm_b)
+```
+
+Now that we have our confidence intervals, let's again make this easier to interpret.
+
+```{r Interpreting the Result}
+(-6.916e-05/4)*1000
+`invlogit`(coef(newt_glm_b)[1] + coef(newt_glm_b)[2]*mean(data_newt$ttx_cm2))
+```
+
+So, at the mean toxicity, there is about a 20% chance that a newt has Chytrid. For every 1,000 ttx/cm2 increase in toxicity, the probability of having Chytrid goes down by about 1.7%.
+
+Stay toxic, friends.
+
+!(data:image/jpeg;base64,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)
